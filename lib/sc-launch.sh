@@ -28,6 +28,10 @@ export __GL_SHADER_DISK_CACHE=1
 export __GL_SHADER_DISK_CACHE_SIZE=10737418240
 export __GL_SHADER_DISK_CACHE_PATH="$WINEPREFIX"
 export __GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1
+# Vulkan ICD & GPU selection options (useful for multi-GPU setups)
+#export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/nvidia_icd.json"
+#export VK_DRIVER_FILES="/usr/share/vulkan/icd.d/nvidia_icd.json"
+#export DXVK_FILTER_DEVICE_NAME="RTX"
 # Mesa (AMD/Intel) shader cache options
 export MESA_SHADER_CACHE_DIR="$WINEPREFIX"
 export MESA_SHADER_CACHE_MAX_SIZE="10G"

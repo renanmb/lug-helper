@@ -713,6 +713,19 @@ getdirs() {
                     # which means sc_base_dir may not yet have been created. But the parent RSI dir must exist
                     # prefix/drive_c/Program Files/Roberts Space Industries/StarCitizen
                     game_path="${wine_prefix}/${default_install_path}/${sc_base_dir}"
+                elif [ -d "${wine_prefix}" ]; then
+                    # Prefix exists, but RSI Launcher has not been installed yet
+                    if message question "The selected directory exists, but Star Citizen / RSI Launcher is not yet installed in:\n\n${wine_prefix}/${default_install_path}\n\nWould you like to initialize this directory as your Star Citizen Wine prefix?"; then
+                        mkdir -p "${wine_prefix}/${default_install_path}"
+                        game_path="${wine_prefix}/${default_install_path}/${sc_base_dir}"
+                        if [ ! -f "${wine_prefix}/${launch_script_name}" ] && [ -f "$launch_script_template" ]; then
+                            cp "$launch_script_template" "${wine_prefix}/${launch_script_name}"
+                            chmod +x "${wine_prefix}/${launch_script_name}"
+                        fi
+                    else
+                        wine_prefix=""
+                        game_path=""
+                    fi
                 else
                     message warning "Unable to locate a game install within the selected Wine prefix! This path does not exist:\n\n${wine_prefix}/${default_install_path}\n\nAt the next screen, please select the directory where you installed Star Citizen (your Wine prefix)\nFor example, the default Wine prefix is: ~/Games/star-citizen"
                     game_path=""
@@ -737,14 +750,23 @@ getdirs() {
 
                     if [ ! -d "$wine_prefix" ]; then
                         printf "That directory is invalid or does not exist. Please try again.\n\n"
-                    elif [ ! -d "${wine_prefix}/${default_install_path}" ]; then
-                        # prefix/drive_c/Program Files/Roberts Space Industries
-                        printf "Unable to locate a game install within the selected Wine prefix! This path does not exist:\n${wine_prefix}/${default_install_path}\nPlease enter the directory where you installed Star Citizen (your Wine prefix)\nFor example, the default Wine prefix is: /home/USER/Games/star-citizen\n\n"
-                    else
-                        # Set the game path
-                        # prefix/drive_c/Program Files/Roberts Space Industries/StarCitizen
+                    elif [ -d "${wine_prefix}/${default_install_path}" ]; then
                         game_path="${wine_prefix}/${default_install_path}/${sc_base_dir}"
                         break
+                    else
+                        printf "The directory exists, but Star Citizen / RSI Launcher is not yet installed in:\n%s/%s\n\nInitialize this directory as your Star Citizen Wine prefix? [y/N]: " "$wine_prefix" "$default_install_path"
+                        read -r init_choice
+                        if [[ "$init_choice" =~ ^[Yy]$ ]]; then
+                            mkdir -p "${wine_prefix}/${default_install_path}"
+                            game_path="${wine_prefix}/${default_install_path}/${sc_base_dir}"
+                            if [ ! -f "${wine_prefix}/${launch_script_name}" ] && [ -f "$launch_script_template" ]; then
+                                cp "$launch_script_template" "${wine_prefix}/${launch_script_name}"
+                                chmod +x "${wine_prefix}/${launch_script_name}"
+                            fi
+                            break
+                        else
+                            printf "Unable to locate a game install within the selected Wine prefix!\nPlease enter the directory where you installed Star Citizen (your Wine prefix)\n\n"
+                        fi
                     fi
                 done
             fi
@@ -1387,8 +1409,14 @@ runner_activate() {
     local selected_path="${installed_runners[idx]}"
 
     if [ ! -f "$wine_prefix/$launch_script_name" ]; then
-        message warning "Unable to find launch script at:\n$wine_prefix/$launch_script_name"
-        return 1
+        if [ -f "$launch_script_template" ]; then
+            debug_print continue "Creating launch script from template at $wine_prefix/$launch_script_name..."
+            cp "$launch_script_template" "$wine_prefix/$launch_script_name"
+            chmod +x "$wine_prefix/$launch_script_name"
+        else
+            message warning "Unable to find launch script at:\n$wine_prefix/$launch_script_name"
+            return 1
+        fi
     fi
 
     debug_print continue "Updating wine_path in $wine_prefix/$launch_script_name to $selected_name..."

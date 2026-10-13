@@ -3497,8 +3497,12 @@ prepare_reinstall() {
         fi
     else
         # There's an existing directory at that location but no Data.p4k file was found for migration
-        message warning "A directory named \"${previous_install_basedir}\" already exists!\n\n${previous_install_path}\n\nInstalling over an existing prefix is not recommended.\nPlease move or delete the above directory and try again."
-        return 1
+        if message question "A directory named \"${previous_install_basedir}\" already exists!\n\n${previous_install_path}\n\nNo previous game files (Data.p4k) were found.\nWould you like to proceed with installing into this directory?"; then
+            return 0
+        else
+            message warning "Installation cancelled."
+            return 1
+        fi
     fi
 }
 

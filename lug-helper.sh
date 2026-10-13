@@ -698,6 +698,15 @@ getdirs() {
                     continue
                 fi
 
+                # If the user selected a runner directory or subdirectory inside a prefix, resolve to prefix root
+                if [[ "$wine_prefix" =~ /runners/ ]] || [[ "$wine_prefix" =~ /runners$ ]]; then
+                    detected_prefix="${wine_prefix%/runners*}"
+                    if [ -d "${detected_prefix}/${default_install_path}" ] || [ -f "${detected_prefix}/${launch_script_name}" ]; then
+                        debug_print continue "User selected runner directory inside prefix. Auto-correcting to prefix root: $detected_prefix"
+                        wine_prefix="$detected_prefix"
+                    fi
+                fi
+
                 # Set the game path
                 if [ -d "${wine_prefix}/${default_install_path}" ]; then
                     # Note: We check for the parent dir here because the game may not have been fully installed yet
@@ -717,6 +726,15 @@ getdirs() {
                 printf "Enter the full path, case sensitive, to the directory where you installed Star Citizen (your Wine prefix)\n"
                 printf "ie. /home/USER/Games/star-citizen\n"
                 while read -rp ": " wine_prefix; do
+                    # If the user selected a runner directory or subdirectory inside a prefix, resolve to prefix root
+                    if [[ "$wine_prefix" =~ /runners/ ]] || [[ "$wine_prefix" =~ /runners$ ]]; then
+                        detected_prefix="${wine_prefix%/runners*}"
+                        if [ -d "${detected_prefix}/${default_install_path}" ] || [ -f "${detected_prefix}/${launch_script_name}" ]; then
+                            printf "Detected runner subfolder. Correcting Wine prefix to: %s\n" "$detected_prefix"
+                            wine_prefix="$detected_prefix"
+                        fi
+                    fi
+
                     if [ ! -d "$wine_prefix" ]; then
                         printf "That directory is invalid or does not exist. Please try again.\n\n"
                     elif [ ! -d "${wine_prefix}/${default_install_path}" ]; then
@@ -1265,6 +1283,8 @@ download_manage() {
         # Set variables for the current wine runner configured in the launch script
         if [ "$download_type" = "runner" ]; then
             get_current_runner
+            menu_options+=("Select active Wine runner")
+            menu_actions+=("runner_select_active")
         fi
 
         # Loop through the download_sources array and create a menu item
@@ -1299,6 +1319,93 @@ download_manage() {
             post_download
         fi
     done
+}
+
+# MARK: runner_select_active()
+# Select which installed Wine runner to use in the launch script
+runner_select_active() {
+    getdirs
+    if [ "$?" -eq 1 ]; then
+        return 1
+    fi
+    download_dir="$wine_prefix/runners"
+
+    if [ ! -d "$download_dir" ]; then
+        message info "No runners directory found at:\n$download_dir"
+        return 0
+    fi
+
+    # Find all installed runner directories containing bin/wine
+    unset installed_runners
+    unset runner_names
+    for item in "$download_dir"/*; do
+        if [ -d "$item" ] && [ -x "$item/bin/wine" ]; then
+            runner_names+=("$(basename "$item")")
+            installed_runners+=("$item")
+        fi
+    done
+
+    if [ "${#installed_runners[@]}" -eq 0 ]; then
+        message info "No installed Wine runners found in:\n$download_dir\n\nPlease install a runner first."
+        return 0
+    fi
+
+    get_current_runner
+
+    # Build menu
+    menu_text_zenity="<b><big>Select Active Wine Runner</big>\n\nChoose the Wine runner to activate for Star Citizen</b>\n\nWine prefix: <a href='file://$wine_prefix'>$wine_prefix</a>"
+    menu_text_terminal="Select Active Wine Runner\nChoose the Wine runner to activate for Star Citizen\nWine prefix: $wine_prefix"
+    menu_text_height="320"
+    menu_type="radiolist"
+    main_menu="false"
+    unset menu_options
+    unset menu_actions
+
+    for (( i=0; i<"${#installed_runners[@]}"; i++ )); do
+        local rname="${runner_names[i]}"
+        if [ -n "$current_runner_basename" ] && [ "$current_runner_basename" = "$rname" ]; then
+            menu_options+=("$rname    [in-use]")
+        else
+            menu_options+=("$rname")
+        fi
+        menu_actions+=("runner_activate $i")
+    done
+
+    menu_options+=("Go Back")
+    menu_actions+=(":")
+
+    menu_height="$(($menu_option_height * ${#menu_options[@]} + $menu_text_height + $menu_text_height_zenity4))"
+    cancel_label="Go Back"
+    menu
+}
+
+# MARK: runner_activate()
+# Sets the chosen runner path in sc-launch.sh
+runner_activate() {
+    local idx="$1"
+    local selected_name="${runner_names[idx]}"
+    local selected_path="${installed_runners[idx]}"
+
+    if [ ! -f "$wine_prefix/$launch_script_name" ]; then
+        message warning "Unable to find launch script at:\n$wine_prefix/$launch_script_name"
+        return 1
+    fi
+
+    debug_print continue "Updating wine_path in $wine_prefix/$launch_script_name to $selected_name..."
+    sed -i "s|^export wine_path=.*|export wine_path=\"${selected_path}/bin\"|" "$wine_prefix/$launch_script_name"
+    sed -i "s|^wine_path=.*|wine_path=\"${selected_path}/bin\"|" "$wine_prefix/$launch_script_name"
+
+    # Test wine execution
+    local wine_ver=""
+    if [ -x "${selected_path}/bin/wine" ]; then
+        wine_ver="$("${selected_path}/bin/wine" --version 2>/dev/null || true)"
+    fi
+
+    if [ -n "$wine_ver" ]; then
+        message info "Active Wine runner set to:\n${selected_name}\n\nVersion: ${wine_ver}"
+    else
+        message info "Active Wine runner set to:\n${selected_name}"
+    fi
 }
 
 # MARK: runner_manage()
@@ -1386,7 +1493,7 @@ download_select_install() {
         elif [ "$contributor_name" = "LUG Wine" ]; then
             required_glibc="2.39"
         elif [ "$contributor_name" = "LUG Experimental" ]; then
-            required_glibc="2.39"
+            required_glibc="2.35"
         else
             required_glibc="0.00"
         fi
@@ -3008,13 +3115,13 @@ install_game() {
         return 1
     fi
 
-    # Check glibc version against default runner requirements
-    required_glibc="2.39"
+    # Check glibc version against supported runner baseline (minimum 2.35)
+    required_glibc="2.35"
     check_glibc
 
     # Display a warning message
     if [ "$glibc_fail" = "true" ]; then
-        message error "Your glibc version is incompatible with the default Wine runner! You may need to update your OS.\n\nSystem glibc: ${system_glibc}\nMinimum required glibc: $required_glibc"
+        message error "Your glibc version is incompatible with Star Citizen Wine runners! You may need to update your OS.\n\nSystem glibc: ${system_glibc}\nMinimum required glibc: $required_glibc"
         return 1
     fi
 
@@ -3139,12 +3246,28 @@ install_game() {
 
     download_dir="$install_dir/runners"
 
-    # Install the default wine runner into the prefix
-    download_wine
-    # Make sure the wine download worked
-    if [ "$?" -eq 1 ]; then
-        message error "Something went wrong while installing ${default_runner}!\nGame installation cannot proceed."
-        return 1
+    # Check if a compatible runner is already installed locally in download_dir
+    local existing_runner=""
+    if [ -d "$download_dir" ]; then
+        for r in "$download_dir"/*; do
+            if [ -d "$r" ] && [ -x "$r/bin/wine" ]; then
+                existing_runner="$(basename "$r")"
+                break
+            fi
+        done
+    fi
+
+    if [ -n "$existing_runner" ]; then
+        debug_print continue "Found existing working runner in $download_dir: $existing_runner"
+        downloaded_item_name="$existing_runner"
+    else
+        # Install the default wine runner into the prefix
+        download_wine
+        # Make sure the wine download worked
+        if [ "$?" -eq 1 ]; then
+            message error "Something went wrong while installing ${default_runner}!\nGame installation cannot proceed."
+            return 1
+        fi
     fi
 
     wine_path="$install_dir/runners/$downloaded_item_name/bin"
@@ -3356,11 +3479,6 @@ prepare_reinstall() {
         return 1
     fi
 }
-
-# MARK: prepare_reinstall()
-# prepare_reinstall() {
-#     return 0
-# }
 
 # MARK: create_desktop_files()
 # Create .desktop files for the RSI Launcher
@@ -3653,11 +3771,42 @@ set_latest_rsi_installer() {
     rsi_installer_url="${rsi_installer_base_url}/${rsi_installer}"
 }
 
+# MARK: is_glibc_at_least()
+# Helper function to check if system GLIBC meets or exceeds target version
+is_glibc_at_least() {
+    local target_ver="$1"
+    local sys_ver
+    if [ -x "$(command -v ldd)" ]; then
+        sys_ver="$(ldd --version | awk '/ldd/{print $NF}')"
+    else
+        return 1
+    fi
+    if [ "$sys_ver" = "$target_ver" ]; then
+        return 0
+    fi
+    if [ "$target_ver" = "$(printf "%s\n%s" "$sys_ver" "$target_ver" | sort -V | head -n1)" ]; then
+        return 0
+    fi
+    return 1
+}
+
 # MARK: set_latest_default_runner()
 # Fetch and store variables for the latest default wine runner filename
 set_latest_default_runner() {
-    default_runner_file="$(curl -s https://api.github.com/repos/starcitizen-lug/lug-wine/releases/latest | grep -Eo "\"browser_download_url\": ?\"[^\"]+\"" | grep -vie "staging" | cut -d '"' -f4 | xargs basename)"
-    # Important: If changing the default runner, adjust the glibc version check in the install_game function
+    if ! is_glibc_at_least "2.39"; then
+        # On GLIBC < 2.39 systems (such as Ubuntu 22.04 with GLIBC 2.35),
+        # use LUG Experimental (compiled for GLIBC 2.35) as default runner
+        default_runner_source=2
+        default_runner_api="${runner_sources[default_runner_source+1]}"
+        default_runner_file="$(curl -s "${default_runner_api}/latest" | grep -Eo "\"browser_download_url\": ?\"[^\"]+\"" | grep -ie "staging" | grep -vie "wayland" | cut -d '"' -f4 | xargs basename)"
+        if [ -z "$default_runner_file" ]; then
+            default_runner_file="$(curl -s "${default_runner_api}/latest" | grep -Eo "\"browser_download_url\": ?\"[^\"]+\"" | cut -d '"' -f4 | head -n 1 | xargs basename)"
+        fi
+    else
+        # Systems with GLIBC >= 2.39 use upstream LUG Wine
+        default_runner_source=0
+        default_runner_file="$(curl -s https://api.github.com/repos/starcitizen-lug/lug-wine/releases/latest | grep -Eo "\"browser_download_url\": ?\"[^\"]+\"" | grep -vie "staging" | cut -d '"' -f4 | xargs basename)"
+    fi
 
     if [ -z "$default_runner_file" ]; then
         return 1
@@ -3665,9 +3814,6 @@ set_latest_default_runner() {
 
     # Store the filename without the file extension
     default_runner="$(basename "$default_runner_file" .tar.gz)"
-
-    # Set the runner_sources array index which points to the default runner source api url (must be an even number in the array, arrays start with 0)
-    default_runner_source=0
 }
 
 # MARK: set_latest_winetricks()
@@ -3680,31 +3826,26 @@ set_latest_winetricks() {
 }
 
 # MARK: check_glibc
-# check_glibc() {
-#     # Sanity checks
-#     if [ -z "$required_glibc" ]; then
-#         debug_print exit "Script error: The string 'required_glibc' was not set before calling the check_glibc function. Aborting."
-#     fi
-
-#     glibc_fail="false"
-
-#     # Check the system glibc
-#     if [ -x "$(command -v ldd)" ]; then
-#         system_glibc="$(ldd --version | awk '/ldd/{print $NF}')"
-#     else
-#         system_glibc="0 (Not installed)"
-#     fi
-
-#     # Sort the versions and check if the installed glibc is smaller
-#     if [ "$required_glibc" != "$system_glibc" ] &&
-#     [ "$system_glibc" = "$(printf "%s\n%s" "$system_glibc" "$required_glibc" | sort -V | head -n1)" ]; then
-#         glibc_fail="true"
-#     fi
-# }
-
 check_glibc() {
+    # Sanity checks
+    if [ -z "$required_glibc" ]; then
+        debug_print exit "Script error: The string 'required_glibc' was not set before calling the check_glibc function. Aborting."
+    fi
+
     glibc_fail="false"
-    return 0
+
+    # Check the system glibc
+    if [ -x "$(command -v ldd)" ]; then
+        system_glibc="$(ldd --version | awk '/ldd/{print $NF}')"
+    else
+        system_glibc="0 (Not installed)"
+    fi
+
+    # Sort the versions and check if the installed glibc is smaller
+    if [ "$required_glibc" != "$system_glibc" ] &&
+    [ "$system_glibc" = "$(printf "%s\n%s" "$system_glibc" "$required_glibc" | sort -V | head -n1)" ]; then
+        glibc_fail="true"
+    fi
 }
 
 # MARK: get_latest_release()
@@ -3835,6 +3976,7 @@ Usage: lug-helper <options>
   -p, --preflight-check         Run system optimization checks
   -i, --install                 Install Star Citizen
   -m, --manage-runners          Install or remove Wine runners
+  -s, --select-runner           Select active Wine runner
   -k, --manage-dxvk             Manage DXVK in the Wine prefix
   -u, --update-launch-script    Update/Repair the game launch script
   -e, --edit-launch-script      Edit the game launch script
@@ -3858,6 +4000,9 @@ Usage: lug-helper <options>
                 ;;
             --manage-runners | -m )
                 cargs+=("runner_manage")
+                ;;
+            --select-runner | -s )
+                cargs+=("runner_select_active")
                 ;;
             --manage-dxvk | -k )
                 cargs+=("dxvk_menu")

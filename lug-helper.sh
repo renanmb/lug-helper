@@ -658,6 +658,11 @@ getdirs() {
     # Check if the config files already exist
     if [ -f "${conf_dir}/${conf_subdir}/${wine_conf}" ]; then
         wine_prefix="$(cat "${conf_dir}/${conf_subdir}/${wine_conf}")"
+        # Sanitize if config was previously saved with a runners subdirectory
+        if [[ "$wine_prefix" =~ /runners/ ]] || [[ "$wine_prefix" =~ /runners$ ]]; then
+            wine_prefix="${wine_prefix%/runners*}"
+            echo "$wine_prefix" > "${conf_dir}/${conf_subdir}/${wine_conf}"
+        fi
         if [ ! -d "$wine_prefix" ]; then
             debug_print continue "The saved wine prefix does not exist, ignoring."
             wine_prefix=""
@@ -693,18 +698,14 @@ getdirs() {
                     return 1
                 fi
 
+                # If the user selected a runner directory or subdirectory inside a prefix, resolve to prefix root immediately
+                if [[ "$wine_prefix" =~ /runners/ ]] || [[ "$wine_prefix" =~ /runners$ ]]; then
+                    wine_prefix="${wine_prefix%/runners*}"
+                fi
+
                 if ! message question "You selected:\n\n${wine_prefix}\n\nIs this correct?"; then
                     wine_prefix=""
                     continue
-                fi
-
-                # If the user selected a runner directory or subdirectory inside a prefix, resolve to prefix root
-                if [[ "$wine_prefix" =~ /runners/ ]] || [[ "$wine_prefix" =~ /runners$ ]]; then
-                    detected_prefix="${wine_prefix%/runners*}"
-                    if [ -d "${detected_prefix}/${default_install_path}" ] || [ -f "${detected_prefix}/${launch_script_name}" ]; then
-                        debug_print continue "User selected runner directory inside prefix. Auto-correcting to prefix root: $detected_prefix"
-                        wine_prefix="$detected_prefix"
-                    fi
                 fi
 
                 # Set the game path
@@ -739,13 +740,10 @@ getdirs() {
                 printf "Enter the full path, case sensitive, to the directory where you installed Star Citizen (your Wine prefix)\n"
                 printf "ie. /home/USER/Games/star-citizen\n"
                 while read -rp ": " wine_prefix; do
-                    # If the user selected a runner directory or subdirectory inside a prefix, resolve to prefix root
+                    # If the user selected a runner directory or subdirectory inside a prefix, resolve to prefix root immediately
                     if [[ "$wine_prefix" =~ /runners/ ]] || [[ "$wine_prefix" =~ /runners$ ]]; then
-                        detected_prefix="${wine_prefix%/runners*}"
-                        if [ -d "${detected_prefix}/${default_install_path}" ] || [ -f "${detected_prefix}/${launch_script_name}" ]; then
-                            printf "Detected runner subfolder. Correcting Wine prefix to: %s\n" "$detected_prefix"
-                            wine_prefix="$detected_prefix"
-                        fi
+                        wine_prefix="${wine_prefix%/runners*}"
+                        printf "Detected runner subfolder. Correcting Wine prefix to: %s\n" "$wine_prefix"
                     fi
 
                     if [ ! -d "$wine_prefix" ]; then
@@ -777,12 +775,8 @@ getdirs() {
     fi
 
     # Save the paths to config files
-    if [ ! -f "${conf_dir}/${conf_subdir}/${wine_conf}" ]; then
-        echo "$wine_prefix" > "${conf_dir}/${conf_subdir}/${wine_conf}"
-    fi
-    if [ ! -f "${conf_dir}/${conf_subdir}/${game_conf}" ]; then
-        echo "$game_path" > "${conf_dir}/${conf_subdir}/${game_conf}"
-    fi
+    echo "$wine_prefix" > "${conf_dir}/${conf_subdir}/${wine_conf}"
+    echo "$game_path" > "${conf_dir}/${conf_subdir}/${game_conf}"
 
     return "$retval"
 }

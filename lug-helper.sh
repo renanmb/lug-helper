@@ -3769,7 +3769,7 @@ get_current_runner() {
     # Double check that we found a path in the launch script
     if [ ! -d "$launcher_winepath" ] || [ -z "$launcher_winepath" ]; then
         launcher_winepath=""
-        message warning "Unable to find the current Wine runner in your launch script!\nDefaulting to system Wine.\n$wine_prefix/$launch_script_name"
+        debug_print continue "Current Wine runner not configured or not found in launch script: $wine_prefix/$launch_script_name"
         return 1
     fi
 

@@ -3357,6 +3357,11 @@ prepare_reinstall() {
     fi
 }
 
+# MARK: prepare_reinstall()
+# prepare_reinstall() {
+#     return 0
+# }
+
 # MARK: create_desktop_files()
 # Create .desktop files for the RSI Launcher
 # The default behavior is to overwrite any existing .desktop files
@@ -3675,26 +3680,31 @@ set_latest_winetricks() {
 }
 
 # MARK: check_glibc
+# check_glibc() {
+#     # Sanity checks
+#     if [ -z "$required_glibc" ]; then
+#         debug_print exit "Script error: The string 'required_glibc' was not set before calling the check_glibc function. Aborting."
+#     fi
+
+#     glibc_fail="false"
+
+#     # Check the system glibc
+#     if [ -x "$(command -v ldd)" ]; then
+#         system_glibc="$(ldd --version | awk '/ldd/{print $NF}')"
+#     else
+#         system_glibc="0 (Not installed)"
+#     fi
+
+#     # Sort the versions and check if the installed glibc is smaller
+#     if [ "$required_glibc" != "$system_glibc" ] &&
+#     [ "$system_glibc" = "$(printf "%s\n%s" "$system_glibc" "$required_glibc" | sort -V | head -n1)" ]; then
+#         glibc_fail="true"
+#     fi
+# }
+
 check_glibc() {
-    # Sanity checks
-    if [ -z "$required_glibc" ]; then
-        debug_print exit "Script error: The string 'required_glibc' was not set before calling the check_glibc function. Aborting."
-    fi
-
     glibc_fail="false"
-
-    # Check the system glibc
-    if [ -x "$(command -v ldd)" ]; then
-        system_glibc="$(ldd --version | awk '/ldd/{print $NF}')"
-    else
-        system_glibc="0 (Not installed)"
-    fi
-
-    # Sort the versions and check if the installed glibc is smaller
-    if [ "$required_glibc" != "$system_glibc" ] &&
-    [ "$system_glibc" = "$(printf "%s\n%s" "$system_glibc" "$required_glibc" | sort -V | head -n1)" ]; then
-        glibc_fail="true"
-    fi
+    return 0
 }
 
 # MARK: get_latest_release()

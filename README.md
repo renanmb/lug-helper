@@ -5,7 +5,8 @@ Wiki: https://wiki.starcitizen-lug.org/
 
 ### *Greetings, Space Penguin!*
 This script helps you quickly and easily install and manage Star Citizen on Linux.  
-It's maintained by the Star Citizen Linux Users Group org and community.
+It's maintained by the Star Citizen Linux Users Group org and community.  
+Human-made, not AI-generated!
 
 For our Quick Start Guide, troubleshooting steps, news, and other useful information such as input devices and head tracking setup, see our community's wiki link above.
 
@@ -107,7 +108,7 @@ Configuration is saved in *$XDG_CONFIG_HOME/starcitizen-lug/*
 
 
 
-## Made with <3
+## Made with <3 by real humans
 **Author:** https://github.com/the-sane
 
 ❤️ Many thanks to everyone who has contributed to the project!  

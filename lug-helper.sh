@@ -33,7 +33,7 @@ if [ ! -x "$(command -v curl)" ]; then
     fi
     exit 1
 fi
-if [ ! -x "$(command -v mktemp)" ] || [ ! -x "$(command -v touch)" ] || [ ! -x "$(command -v chmod)" ] || [ ! -x "$(command -v sort)" ] || [ ! -x "$(command -v basename)" ] || [ ! -x "$(command -v realpath)" ] || [ ! -x "$(command -v dirname)" ] || [ ! -x "$(command -v cut)" ] || [ ! -x "$(command -v numfmt)" ] || [ ! -x "$(command -v tr)" ]; then
+if [ ! -x "$(command -v mktemp)" ] || [ ! -x "$(command -v touch)" ] || [ ! -x "$(command -v chmod)" ] || [ ! -x "$(command -v sort)" ] || [ ! -x "$(command -v basename)" ] || [ ! -x "$(command -v realpath)" ] || [ ! -x "$(command -v dirname)" ] || [ ! -x "$(command -v cut)" ] || [ ! -x "$(command -v numfmt)" ] || [ ! -x "$(command -v tr)" ] || [ ! -x "$(command -v df)" ]; then
     # coreutils
     # Print to stderr and also try warning the user through zenity or notify-send
     printf "lug-helper.sh: One or more required packages were not found on this system.\nPlease check that 'coreutils' is installed!\n" 1>&2
@@ -145,6 +145,9 @@ for searchdir in "${data_dirs_array[@]}"; do
     fi
 done
 
+# Set the path where the joystick udev file will be created if the user selects that option
+joystick_udev_file="/etc/udev/rules.d/40-starcitizen-joystick-uaccess.rules"
+
 ######## Runners ###########################################################
 
 # URLs for downloading Wine runners
@@ -180,12 +183,14 @@ lug_discord="https://discord.gg/QRexSTkF25"
 # RSI Installer version and url
 rsi_installer_base_url="https://install.robertsspaceindustries.com/rel/2"
 rsi_installer_latest_yml="${rsi_installer_base_url}/latest.yml"
+rsi_rc_installer_base_url="https://install.robertsspaceindustries.com/pre-rel/2"
+rsi_rc_installer_latest_yml="${rsi_rc_installer_base_url}/rc.yml"
 
 # Github repo and script version info
 repo="starcitizen-lug/lug-helper"
 git_url="https://github.com/${repo}"
 releases_url="${git_url}/releases"
-current_version="v4.16"
+current_version="v4.17"
 changelog_url="${releases_url}/tag/${current_version}"
 
 ############################################################################
@@ -215,9 +220,15 @@ try_exec() {
 
             # Check the exit status
             exit_code="$?"
-            if [ "$exit_code" -eq 126 ] || [ "$exit_code" -eq 127 ]; then
-                # User cancel or error
+            if [ "$exit_code" -eq 126 ]; then
+                # User cancelled
+                return 1
+            elif [ "$exit_code" -eq 127 ]; then
+                # pkexec error
                 debug_print continue "pkexec returned an error. Falling back to sudo..."
+            elif [ "$exit_code" -ne 0 ]; then
+                # Command returned an error
+                return 1
             else
                 # Successful execution, return here
                 return 0
@@ -228,20 +239,20 @@ try_exec() {
             sudo sh -c "$exec_command"
 
             # Check the exit status
-            if [ "$?" -eq 1 ]; then
+            if [ "$?" -ne 0 ]; then
                 # Error
                 return 1
             fi
         else
             # We don't know how to perform this operation with elevated privileges
-            printf "\nNeither Polkit nor sudo appear to be installed. Unable to execute the command with the required privileges.\n"
+            printf "\nNeither Polkit nor sudo appear to be working/installed. Unable to execute the command with the required privileges.\n"
             return 1
         fi
     elif [ "$exec_type" = "user" ]; then
         sh -c "$exec_command"
 
         # Check the exit status
-        if [ "$?" -eq 1 ]; then
+        if [ "$?" -ne 0 ]; then
             # Error
             return 1
         fi
@@ -2528,19 +2539,21 @@ call_launch_script() {
 # Create udev rules for common joystick vendors
 create_joystick_rules() {
     # Format the udev file path as a clickable Zenity link
-    udev_file_formatted="/etc/udev/rules.d/40-starcitizen-joystick-uaccess.rules"
+    joystick_udev_file_formatted="$joystick_udev_file"
+    udev_dir="$(dirname "$joystick_udev_file")"
     if [ "$use_zenity" -eq 1 ]; then
-        udev_file_formatted="<a href='file://$udev_file_formatted'>$udev_file_formatted</a>"
+        joystick_udev_file_formatted="<a href='file://$joystick_udev_file_formatted'>$joystick_udev_file_formatted</a>"
     fi
 
-    debug_print continue "Creating /etc/udev/rules.d/40-starcitizen-joystick-uaccess.rules..."
-    try_exec root 'mkdir -p "/etc/udev/rules.d" && printf "# Set the uaccess tag for raw HID access for VKB/Virpil/Thrustmaster devices in Wine\nKERNEL==\"hidraw*\", ATTRS{idVendor}==\"231d|3344|044f\", ATTRS{idProduct}==\"*\", MODE=\"0660\", TAG+=\"uaccess\"" > /etc/udev/rules.d/40-starcitizen-joystick-uaccess.rules'
+    debug_print continue "Creating ${joystick_udev_file}..."
+    try_exec root 'mkdir -p "'"${udev_dir}"'" && printf "# Set the uaccess tag for raw HID access for VKB/Virpil/Thrustmaster devices in Wine\nKERNEL==\"hidraw*\", ATTRS{idVendor}==\"231d|3344|044f\", ATTRS{idProduct}==\"*\", MODE=\"0660\", TAG+=\"uaccess\"" > '"${joystick_udev_file}"
+    # Note on quoting: posix shell script concatenates adjacent quotes. I use this to splice strings together in the above command
 
     if [ "$?" -eq 1 ]; then
         message error "Unable to create joystick udev rules! See terminal output for details."
         return 0
     else
-        message info "Joystick udev rules have been created at:\n${udev_file_formatted}\n\nUnplug and replug your device for it to take effect."
+        message info "Joystick udev rules have been created at:\n${joystick_udev_file_formatted}\n\nUnplug and replug your device for it to take effect."
     fi 
 }
 
@@ -2593,7 +2606,14 @@ install_powershell() {
 
 # MARK: reinstall_rsi_launcher()
 # Download and re-install the latest RSI Launcher into the wine prefix
+# Accepts an optional string argument "rc" to download the latest RC version instead of the stable release
 reinstall_rsi_launcher() {
+    # Check for release candidate argument
+    download_rc="false"
+    if [ "$1" = "rc" ]; then
+        download_rc="true"
+    fi
+
     # Update directories
     getdirs
 
@@ -2609,7 +2629,11 @@ reinstall_rsi_launcher() {
         rm -r --interactive=never "${wine_prefix}/${rsilauncher_appdata_path}"
     fi
 
-    download_rsi_installer
+    if [ "$download_rc" = "true" ]; then
+        download_rsi_installer rc
+    else
+        download_rsi_installer
+    fi
     # Abort if the download failed
     if [ "$?" -eq 1 ]; then
         message error "Unable to install or update the RSI Launcher."
@@ -2705,7 +2729,7 @@ display_dirs() {
         fi
     fi
 
-    # Other files installed by the Helper
+    # .desktop files installed by the Helper
     if [ -n "$wine_prefix" ] && [ -d "$wine_prefix" ]; then
         # Prepare variables containing paths to the .desktop files
         set_desktop_file_paths
@@ -2739,6 +2763,15 @@ display_dirs() {
             if [ -n "$desktop_list" ]; then
                 dirs_list+=".desktop files:\n${desktop_list}\n"
             fi
+        fi
+    fi
+
+    # Joystick udev file installed by the Helper
+    if [ -f "$joystick_udev_file" ]; then
+        if [ "$use_zenity" -eq 1 ]; then
+            dirs_list+="Joystick udev rules:\n<a href='file://${joystick_udev_file}'>${joystick_udev_file}</a>\n\n"
+        else
+            dirs_list+="Joystick udev rules:\n${joystick_udev_file}\n\n"
         fi
     fi
 
@@ -2885,7 +2918,13 @@ uninstall_game() {
         desktop_list="\n.desktop files:\n${desktop_list}"
     fi
 
-    if message question "The following files and directories will be deleted:\n\nWine prefix:\n${wine_prefix}\n${desktop_list}\nDo you want to proceed?"; then
+    # Check if the joystick udev file was installed and needs removal
+    udev_list=""
+    if [ -f "$joystick_udev_file" ]; then
+        udev_list="Joystick udev rules:\n${joystick_udev_file}\n"
+    fi
+
+    if message question "The following files and directories will be deleted:\n\nWine prefix:\n${wine_prefix}\n${desktop_list}\n${udev_list}\nDo you want to proceed?"; then
         # Delete wine prefix
         debug_print continue "Deleting $wine_prefix..."
         rm -r --interactive=never "$wine_prefix"
@@ -2906,6 +2945,16 @@ uninstall_game() {
         if [ -n "$desktop_list" ] && [ -x "$(command -v update-desktop-database)" ]; then
             debug_print continue "Running update-desktop-database..."
             update-desktop-database "${data_dir}/applications"
+        fi
+
+        # Delete udev rules
+        if [ -f "$joystick_udev_file" ]; then
+            debug_print continue "Deleting joystick udev rules..."
+            try_exec root "rm --interactive=never \"$joystick_udev_file\""
+
+            if [ "$?" -eq 1 ]; then
+                message warning "Unable to delete joystick udev rules! See terminal output for details."
+            fi
         fi
 
         # Reset Helper prefix configs since this prefix has been removed
@@ -3164,12 +3213,26 @@ install_game() {
     move_datap4k="false"
 
     # Get the install path from the user
+    have_valid_path="false"
     if message question "Would you like to use the default install path?\n\n$HOME/Games/star-citizen"; then
         # Set the default install path
         install_dir="$HOME/Games/star-citizen"
+
+        # Walk the path up to the first existing parent dir, or root
+        fs_check_path="$install_dir"
+        while [ ! -d "$fs_check_path" ] && [ "$fs_check_path" != "/" ]; do
+            fs_check_path="$(dirname "$fs_check_path")"
+        done
+
+        if df --output=fstype "$fs_check_path" | grep -qiE "ntfs3?|fuseblk"; then
+            message warning "Installing Star Citizen onto an NTFS filesystem is not recommended.\nPlease select a Linux filesystem to avoid file corruption!"
+            have_valid_path="false"
+        else
+            have_valid_path="true"
+        fi
         
         # Are we trying to re-install over an existing prefix?
-        if [ -d "$install_dir" ] && [ -n "$(ls -A "$install_dir")" ]; then
+        if [ "$have_valid_path" = "true" ] && [ -d "$install_dir" ] && [ -n "$(ls -A "$install_dir")" ]; then
             # star-citizen exists and is not empty
 
             # Back up the old install and check for a Data.p4k file. Sets the move_datap4k flag based on results.
@@ -3180,56 +3243,88 @@ install_game() {
                 return 1
             fi
         fi
-    else
+    fi
+    
+    # If we don't have a valid path from the above, let the user choose their own install path
+    if [ "$have_valid_path" = "false" ]; then
         if [ "$use_zenity" -eq 1 ]; then
             message info "On the next screen, select your Star Citizen install location"
 
-            # Get the install path from the user
-            install_dir="$(zenity --file-selection --directory --title="Choose your Star Citizen install directory" --filename="$HOME/" 2>/dev/null)"
+            while [ "$have_valid_path" = "false" ]; do
+                # Get the install path from the user
+                install_dir="$(zenity --file-selection --directory --title="Choose your Star Citizen install directory" --filename="$HOME/" 2>/dev/null)"
 
-            if [ "$?" -eq -1 ]; then
-                message error "An unexpected error has occurred. The Helper is unable to proceed."
-                return 1
-            elif [ -z "$install_dir" ]; then
-                # User clicked cancel or something else went wrong with the zenity file picker
-                message warning "Installation cancelled."
-                return 1
-            fi
+                exit_code="$?"
 
-            # If the selected path doesn't end in a star-citizen directory, set that as the install directory to be created
-            if [ "$(basename "$install_dir")" != "star-citizen" ]; then
-                install_dir="$install_dir/star-citizen"
-            fi
-
-            # Are we trying to re-install over an existing prefix?
-            if [ -d "$install_dir" ] && [ -n "$(ls -A "$install_dir")" ]; then
-                # Back up the old install and check for a Data.p4k file. Sets the move_datap4k flag based on results.
-                prepare_reinstall "$install_dir"
-                
-                # Cancel installation if prepare_reinstall returns failure
-                if [ "$?" -eq 1 ]; then
+                if [ "$exit_code" -eq -1 ]; then
+                    # Zenity internal error
+                    message error "An unexpected error has occurred. The Helper is unable to proceed."
+                    return 1
+                elif [ "$exit_code" -eq 1 ] || [ -z "$install_dir" ]; then
+                    # User clicked cancel or something else went wrong with the zenity file picker
+                    message warning "Installation cancelled."
                     return 1
                 fi
-            fi
+
+                if df --output=fstype "$install_dir" | grep -qiE "ntfs3?|fuseblk"; then
+                    message warning "Installing Star Citizen onto an NTFS filesystem is not recommended.\nPlease select a Linux filesystem to avoid file corruption!"
+                    have_valid_path="false"
+                    continue
+                fi
+
+                # If the selected path doesn't end in a star-citizen directory, set that as the install directory to be created
+                if [ "$(basename "$install_dir")" != "star-citizen" ]; then
+                    install_dir="$install_dir/star-citizen"
+                fi
+
+                have_valid_path="true"
+
+                # Are we trying to re-install over an existing prefix?
+                if [ -d "$install_dir" ] && [ -n "$(ls -A "$install_dir")" ]; then
+                    # Back up the old install and check for a Data.p4k file. Sets the move_datap4k flag based on results.
+                    prepare_reinstall "$install_dir"
+                    
+                    # Cancel installation if prepare_reinstall returns failure
+                    if [ "$?" -eq 1 ]; then
+                        return 1
+                    fi
+                fi
+            done
         else
             # No Zenity, use terminal-based menus
             clear
             # Get the install path from the user
             printf "Enter the desired Star Citizen install path (case sensitive)\nie. /home/${USER}/Games/star-citizen\n\n"
             while read -rp "Install path: " install_dir; do
-                # Expand ~ to the user home dir
+                # Path checks
                 case "$install_dir" in
                     ~*)
+                        # Expand ~ to the user home dir path
                         install_dir="${HOME}${install_dir#\~}"
                         ;;
+                    /*)
+                        # It's an absolute path so we're good
+                        ;;
                     *)
+                        # Not an absolute path so it may be an invalid path
+                        printf "Please enter an absolute path starting with /\n\n"
+                        continue
                         ;;
                 esac
 
+                # Walk the path up to the first existing parent dir, or root
+                fs_check_path="$install_dir"
+                while [ ! -d "$fs_check_path" ] && [ "$fs_check_path" != "/" ]; do
+                    fs_check_path="$(dirname "$fs_check_path")"
+                done
+
                 if [ -z "$install_dir" ]; then
                     printf "Invalid directory. Please try again.\n\n"
+                elif df --output=fstype "$fs_check_path" | grep -qiE "ntfs3?|fuseblk"; then
+                    printf "Installing Star Citizen onto an NTFS filesystem is not recommended.\nPlease select a Linux filesystem to avoid file corruption!\n\n"
                 elif [ ! -d "$install_dir" ]; then
                     if message question "That directory does not exist.\nWould you like it to be created for you?\n"; then
+                        have_valid_path="true"
                         break
                     fi
                 elif [ -d "$install_dir" ] && [ -n "$(ls -A "$install_dir")" ]; then
@@ -3242,8 +3337,10 @@ install_game() {
                         return 1
                     fi
 
+                    have_valid_path="true"
                     break
                 else
+                    have_valid_path="true"
                     break
                 fi
             done
@@ -3738,13 +3835,27 @@ download_winetricks() {
 
 # MARK: download_rsi_installer()
 # Downloads the latest RSI setup installer to a temporary file
+# Accepts an optional string argument "rc" to download the latest RC version instead of the stable release
 download_rsi_installer() {
-    # Fetch the latest RSI installer url
-    set_latest_rsi_installer
-    # Sanity check
-    if [ "$?" -eq 1 ]; then
-        message error "Could not fetch the latest RSI installer! The latest.yml format may have changed or the site is down."
-        return 1
+    # Check for release candidate argument
+    if [ "$1" = "rc" ]; then
+        # Fetch the latest RC RSI installer url
+        set_latest_rsi_rc_installer
+
+        # Sanity check
+        if [ "$?" -eq 1 ]; then
+            message error "Could not fetch the latest RSI RC installer! The rc.yml format may have changed or the site is down."
+            return 1
+        fi
+    else
+        # Fetch the latest RSI installer url
+        set_latest_rsi_installer
+
+        # Sanity check
+        if [ "$?" -eq 1 ]; then
+            message error "Could not fetch the latest RSI installer! The latest.yml format may have changed or the site is down."
+            return 1
+        fi
     fi
 
     # Download RSI installer to tmp
@@ -3814,6 +3925,20 @@ is_glibc_at_least() {
         return 0
     fi
     return 1
+}
+
+# MARK: set_latest_rsi_rc_installer()
+# Fetch and store variables for the latest RSI RC installer filename and url
+set_latest_rsi_rc_installer() {
+    # Fetch the yml and parse it for the latest filename
+    # ie. RSI Launcher-Setup-2.9.0.exe
+    rsi_installer="$(curl -s "$rsi_rc_installer_latest_yml" | grep -Eo "url:.+" | sed 's/url:[[:space:]]*//')"
+
+    if [ -z "$rsi_installer" ]; then
+        return 1
+    fi
+
+    rsi_installer_url="${rsi_rc_installer_base_url}/${rsi_installer}"
 }
 
 # MARK: set_latest_default_runner()
@@ -4009,6 +4134,7 @@ Usage: lug-helper <options>
   -c, --wine-config             Launch winecfg for the game's prefix
   -j, --wine-controllers        Launch Wine controllers configuration
   -l, --update-rsi-launcher     Update/Re-install RSI Launcher
+  -r, --install-rc-launcher     Update/Install RSI Release Candidate Launcher
   -d, --show-directories        Show all Star Citizen and Helper directories
   -w, --show-wiki               Show the LUG Wiki
   -x, --reset-helper            Delete saved lug-helper configs
@@ -4047,6 +4173,9 @@ Usage: lug-helper <options>
                 ;;
             --update-rsi-launcher | -l )
                 cargs+=("reinstall_rsi_launcher")
+                ;;
+            --install-rc-launcher | -r )
+                cargs+=("reinstall_rsi_launcher rc")
                 ;;
             --show-directories | -d )
                 cargs+=("display_dirs")
